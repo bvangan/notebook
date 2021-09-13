@@ -1,0 +1,186 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import transforms
+from collections import namedtuple
+from scipy.stats import norm
+
+
+#@title Figure Settings
+import ipywidgets as widgets       # interactive display
+from ipywidgets import interactive, interact, HBox, Layout,VBox
+from IPython.display import HTML
+%config InlineBackend.figure_format = 'retina'
+plt.style.use("https://raw.githubusercontent.com/NeuromatchAcademy/course-content/master/nma.mplstyle")
+
+
+# @title Plotting Functions
+
+def visualize_Astrocat(s, T):
+  plt.plot(s, color='limegreen', lw=2)
+  plt.plot([T], [s[-1]], marker='o', markersize=8, color='limegreen')
+  plt.xlabel('Time t')
+  plt.ylabel('s(t)')
+
+
+def plot_measurement(s, m, T):
+  plt.plot(s, color='limegreen', lw=2, label='true position')
+  plt.plot([T], [s[-1]], marker='o', markersize=8, color='limegreen')
+  plt.plot(m, '.', color='crimson', lw=2, label='measurement')
+  plt.xlabel('Time t')
+  plt.ylabel('s(t)')
+  plt.legend()
+  plt.show()
+
+def plot_function(u=1,v=2,w=3,x=4,y=5,z=6):
+    time=np.arange(0,1,0.01)
+    df=pd.DataFrame({"Y1":np.sin(time*u*2*np.pi),"y2":np.sin(time*v*2*np.pi),"y3":np.sin(time*w*2*np.pi),
+                    "y4":np.sin(time*x*2*np.pi),"y5":np.sin(time*y*2*np.pi),"y6":np.sin(time*z*2*np.pi)})
+    df.plot()
+
+
+# @title Helper Functions
+
+gaussian = namedtuple('Gaussian', ['mean', 'cov'])
+
+def filter(D, process_noise, measurement_noise, posterior, m):
+    todays_prior = gaussian(D * posterior.mean, D**2 * posterior.cov + process_noise)
+    likelihood = gaussian(m, measurement_noise)
+
+    info_prior = 1/todays_prior.cov
+    info_likelihood = 1/likelihood.cov
+    info_posterior = info_prior + info_likelihood
+
+    prior_weight = info_prior / info_posterior
+    likelihood_weight = info_likelihood / info_posterior
+    posterior_mean = prior_weight * todays_prior.mean  +  likelihood_weight * likelihood.mean
+
+    posterior_cov = 1/info_posterior
+    todays_posterior = gaussian(posterior_mean, posterior_cov)
+    """
+    prior = gaussian(belief.mean, belief.cov)
+
+    predicted_estimate = D * belief.mean
+    predicted_covariance = D**2 * belief.cov + process_noise
+
+    likelihood = gaussian(m, measurement_noise)
+    innovation_estimate = m - predicted_estimate
+    innovation_covariance = predicted_covariance + measurement_noise
+
+    K = predicted_covariance / innovation_covariance  # Kalman gain, i.e. the weight given to the difference between the measurement and predicted measurement
+    updated_mean = predicted_estimate + K * innovation_estimate
+    updated_cov = (1 - K) * predicted_covariance
+    todays_posterior = gaussian(updated_mean, updated_cov)
+    """
+    return todays_prior, likelihood, todays_posterior
+
+
+def paintMyFilter(D, initial_guess, process_noise, measurement_noise, s, m, s_, cov_):
+    # Compare solution with filter function
+
+    filter_s_ = np.zeros(T)    # estimate (posterior mean)
+    filter_cov_ = np.zeros(T)    # uncertainty (posterior covariance)
+
+    posterior = initial_guess
+    filter_s_[0] = posterior.mean
+    filter_cov_[0] = posterior.cov
+
+    process_noise_std = np.sqrt(process_noise)
+    measurement_noise_std = np.sqrt(measurement_noise)
+
+    for i in range(1, T):
+        prior, likelihood, posterior = filter(D, process_noise, measurement_noise, posterior, m[i])
+        filter_s_[i] =  posterior.mean
+        filter_cov_[i] = posterior.cov
+
+    smin = min(min(m),min(s-2*np.sqrt(cov_[-1])),min(s_-2*np.sqrt(cov_[-1])))
+    smax = max(max(m),max(s+2*np.sqrt(cov_[-1])),max(s_+2*np.sqrt(cov_[-1])))
+    pscale = 0.2  # scaling factor for displaying pdfs
+
+    fig = plt.figure(figsize=[15, 10])
+    ax = plt.subplot(2, 1, 1)
+    ax.set_xlabel('time')
+    ax.set_ylabel('state')
+    ax.set_xlim([0, T+(T*pscale)])
+    ax.set_ylim([smin, smax])
+
+    ax.plot(t, s, color='limegreen', lw=2, label='Astrocat´s trajectory')
+    ax.plot([t[-1]], [s[-1]], marker='o', markersize=8, color='limegreen')
+
+    ax.plot(t, m, '.', color='crimson', lw=2, label='measurements')
+    ax.plot([t[-1]], [m[-1]], marker='o', markersize=8, color='crimson')
+
+    ax.plot(t, filter_s_, color='black', lw=2, label='correct estimated trajectory')
+    ax.plot([t[-1]], [filter_s_[-1]], marker='o', markersize=8, color='black')
+
+    res = '! :)' if np.mean((s_ - filter_s_)**2) < 0.1 else ' :('
+    ax.plot(t, s_, '--', color='lightgray', lw=2, label='your estimated trajectory' + res)
+    ax.plot([t[-1]], [s_[-1]], marker='o', markersize=8, color='lightgray')
+
+    plt.legend()
+    plt.show()
+
+
+
+
+# DECODER
+# Fixed params
+
+np.random.seed(0)
+
+T_max = 200
+D = 1
+tau_min = 1
+tau_max = 50
+process_noise_min = 0.1
+process_noise_max = 10
+measurement_noise_min = 0.1
+measurement_noise_max = 10
+
+unit_process_noise = np.random.randn(T_max)     # compute all N(0, 1) in advance to speed up time slider
+unit_measurement_noise = np.random.randn(T_max)     # compute all N(0, 1) in advance to speed up time slider
+
+
+def simulate(D, s0, sigma_p, T):
+  """ Compute the response of the linear dynamical system.
+
+  Args:
+    D (scalar): dynamics multiplier
+    s0 (scalar): initial postion
+    sigma_p (scalar): amount of noise in the system (standard deviation)
+    T (scalar): total duration of the simulation
+
+  Returns:
+    ndarray: `s`: astrocat's trajectory up to time T
+  """
+
+  # Initialize variables
+  s = np.zeros(T+1)
+  s[0] = s0
+
+  # Compute the position at time t given the position at time t-1 for all t
+  # Consider that np.random.normal(mu, sigma) generates a random sample from
+  # a gaussian with mean = mu and standard deviation = sigma
+
+  for t in range(1, len(s)):
+
+    
+    # Update position
+    s[t] = D*s[t-1] + np.random.normal(0, sigma_p)
+
+  return s
+
+
+# Set random seed
+np.random.seed(0)
+
+# Set parameters
+D = 0.9    # parameter in s(t)
+T = 50      # total time duration
+s0 = 5.     # initial condition of s at time 0
+sigma_p = 2 # amount of noise in the actuators of astrocat's propulsion unit
+
+# Simulate Astrocat
+s = simulate(D, s0, sigma_p, T)
+
+# Visualize
+visualize_Astrocat(s, T)
